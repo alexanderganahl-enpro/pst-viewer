@@ -1,0 +1,23 @@
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+
+# Never accidentally commit a real PST/OST — this is a local-only tool,
+# test fixtures should live outside the repo.
+*.pst
+*.ost
