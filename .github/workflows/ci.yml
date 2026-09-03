@@ -18,4 +18,5 @@ jobs:
 
       - run: npm ci
       - run: npx tsc -b --noEmit
+      - run: npm test
       - run: npm run build

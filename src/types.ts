@@ -55,10 +55,23 @@ export interface OpenedFile {
   tree: FolderNode
 }
 
+/** Files at or above this size are opened in "lazy" mode: the worker reads
+ * byte ranges on demand straight from the `File` (via `File.slice()` +
+ * `FileReaderSync`) instead of loading the whole thing into memory up
+ * front. Below it, reading the whole file once is simpler and, for
+ * anything that comfortably fits in memory, faster. See
+ * src/worker/lazyFileSource.ts and README.md's Limitations section. */
+export const LAZY_MODE_THRESHOLD_BYTES = 1024 ** 3 // 1 GiB
+
+/** How the worker should get at the opened file's bytes. */
+export type FileSource =
+  | { mode: 'eager'; buffer: ArrayBuffer }
+  | { mode: 'lazy'; file: File }
+
 /* ---- Worker request / response protocol ---- */
 
 export type WorkerRequest =
-  | { kind: 'open'; reqId: number; fileName: string; fileSize: number; buffer: ArrayBuffer }
+  | { kind: 'open'; reqId: number; fileName: string; fileSize: number; source: FileSource }
   | { kind: 'listFolder'; reqId: number; folderId: string }
   | { kind: 'getMessage'; reqId: number; folderId: string; messageId: string }
   | {

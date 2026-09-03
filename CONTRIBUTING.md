@@ -20,7 +20,7 @@ for where to find a small, public sample PST for testing).
   the browser tab. Please don't introduce a code path that sends the opened file, or any data
   derived from it, over the network (analytics included).
 - **Read-only by design.** This app should never write to the file the user opened.
-- Run `npx tsc -b --noEmit` and `npm run build` before opening a PR — CI runs both.
+- Run `npx tsc -b --noEmit`, `npm test`, and `npm run build` before opening a PR — CI runs all three.
 - Keep PRs focused; small, reviewable changes are much easier to merge.
 
 ## Project layout

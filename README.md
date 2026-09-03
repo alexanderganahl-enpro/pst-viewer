@@ -72,33 +72,41 @@ npm run preview
 None of this is a substitute for your own judgment — if a `.pst` file's contents are
 sensitive, that sensitivity doesn't change just because the tool reading it is local-only.
 
+## Memory model
+
+Opening a file picks one of two modes, decided purely by size:
+
+- **Under ~1 GB** ("eager"): the file is read into memory once via `file.arrayBuffer()` and
+  *transferred* (not copied) into the parsing Web Worker — simple and fast for anything that
+  comfortably fits.
+- **At/above ~1 GB** ("lazy"): the `File` object itself is handed to the worker, which reads
+  byte ranges from disk on demand (`File.slice()` + the in-worker-only `FileReaderSync`) as
+  `pst-extractor` asks for them, through a small LRU-cached shim
+  ([lazyFileSource.ts](src/worker/lazyFileSource.ts)) that stands in for an in-memory buffer
+  without ever allocating one. The whole file is never resident in memory at once — memory use
+  stays low (a bounded ~32 MB block cache, plus whatever folders/messages you've actually
+  browsed) regardless of how large the PST is. The trade-off is more, smaller disk reads, so
+  browsing can be a little slower, especially on a slow disk.
+
+Either way:
+
+- Closing a file (or opening a new one) terminates the worker outright, releasing everything
+  it was holding — no gradual leak across files opened in one session.
+- Only the last few folders you've browsed are kept parsed in memory; older ones are evicted
+  (LRU) so panning around a mailbox with many huge folders doesn't accumulate without bound.
+
+The lazy mode's cache/copy logic has unit tests
+([lazyFileSource.test.ts](src/worker/__tests__/lazyFileSource.test.ts)) covering block-boundary
+stitching, the short final block, EOF clamping, and cache eviction — run with `npm test`.
+
 ## Limitations
 
-- **Very large PST files (multi-GB) are read fully into browser memory**, so they're limited
-  by how much memory your browser tab can use. This is the single biggest limitation and is
-  inherent to the current architecture (see below) rather than a bug — the app warns you
-  before opening a file over ~1 GB. A few things are already done to keep the footprint as
-  low as this architecture allows:
-  - The file buffer is *transferred*, not copied, into the parsing worker, so opening a file
-    doesn't briefly need 2x its size in memory.
-  - Closing a file (or opening a new one) terminates the worker outright, releasing
-    everything it was holding — no gradual leak across files opened in one session.
-  - Only the last few folders you've browsed are kept parsed in memory; older ones are
-    evicted (LRU) so panning around a mailbox with many huge folders doesn't accumulate
-    without bound.
-  - What none of this changes: the underlying PST parser (`pst-extractor`) requires
-    random access across the *whole* file, so the full file still has to be resident at
-    once — there's no way to page it in from disk in this architecture. Doing so would mean
-    replacing `pst-extractor`'s buffer-backed reads with reads against the `File` object
-    itself (e.g. `File.slice()` + the in-worker-only `FileReaderSync`, so pst-extractor's
-    synchronous read calls keep working), which effectively means forking its I/O layer.
-    That's a real option for anyone who wants to take it on — tracked in
-    [#1](https://github.com/creedofman/pst-viewer/issues/1) — but it hasn't been done here
-    yet.
 - Calendar, contact, and task items aren't rendered with dedicated views yet — this first
   release focuses on mail.
 - RTF-only message bodies (no plain text or HTML alternative) aren't rendered; this is
   uncommon in modern PSTs.
+- Extremely large files (tens of GB) haven't been tested and may hit browser-specific `Blob`
+  size limits, even in lazy mode.
 
 Contributions that address any of the above are very welcome — see below.
 

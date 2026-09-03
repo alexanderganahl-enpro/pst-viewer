@@ -1,11 +1,19 @@
 /// <reference lib="webworker" />
 /**
- * All PST parsing happens in this worker, entirely in memory.
+ * All PST parsing happens in this worker.
  *
- * The file the user picks is read once into an ArrayBuffer on the main
- * thread and transferred here — it is never written anywhere, never sent
- * over the network, and this worker has no network access of its own.
- * Everything below just walks the PST's own B-tree structure in RAM.
+ * The file the user picks is never written anywhere and never sent over
+ * the network — this worker has no network access of its own — but it can
+ * be read one of two ways, decided by size in pstClient.ts:
+ *
+ *  - "eager" (the default, smaller files): read once into an ArrayBuffer
+ *    on the main thread and transferred here.
+ *  - "lazy" (files at/above LAZY_MODE_THRESHOLD_BYTES): the `File` object
+ *    itself is handed over, and bytes are read on demand straight off
+ *    disk via lazyFileSource.ts, so the whole file is never resident in
+ *    memory at once. See that file and README.md's Limitations section.
+ *
+ * Either way, everything below just walks the PST's own B-tree structure.
  */
 import { Buffer } from 'buffer'
 import { PSTAttachment, PSTFile, PSTFolder, PSTMessage } from 'pst-extractor'
@@ -17,6 +25,7 @@ import type {
   WorkerRequest,
   WorkerResponse,
 } from '../types'
+import { createLazyFileSource } from './lazyFileSource'
 
 let pstFile: PSTFile | null = null
 // Folder id -> live PSTFolder instance, so we can re-enter a folder later
@@ -180,7 +189,10 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       case 'open': {
         folderById.clear()
         messagesByFolder.clear()
-        const buffer = Buffer.from(req.buffer)
+        const buffer =
+          req.source.mode === 'eager'
+            ? Buffer.from(req.source.buffer)
+            : createLazyFileSource(req.source.file, req.fileSize)
         pstFile = new PSTFile(buffer)
         const root = pstFile.getRootFolder()
         const storeName =
@@ -207,7 +219,22 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         const meta = toAttachmentMeta(attachment, req.attachmentIndex)
         const stream = attachment.fileInputStream
         if (!stream) throw new Error('This attachment has no readable content')
-        const out = Buffer.alloc(attachment.size)
+        // Do NOT trust attachment.size (the PR_ATTACH_SIZE MAPI property)
+        // as the read length — it can disagree with the underlying
+        // stream's actual length (observed on a real PST: size=257 vs
+        // stream.length=120), and pst-extractor's readCompletely()/
+        // readBlock() has a latent bug where asking for more bytes than
+        // the stream truly has spins forever rather than erroring: its
+        // EOF check compares two `Long` objects with `==` (reference
+        // equality — always false for equal-but-distinct instances) so it
+        // never fires, and readBlock falls through to correctly compute
+        // zero bytes remaining but returns 0 instead of the -1 EOF
+        // sentinel readCompletely's `while (offset < target.length)` loop
+        // expects — offset then never advances, and the loop spins at
+        // 100% CPU indefinitely. Capping the request to what the stream
+        // actually reports avoids ever taking that path.
+        const readLength = Math.min(attachment.size, stream.length.toNumber())
+        const out = Buffer.alloc(readLength)
         stream.readCompletely(out)
         const arrayBuffer = out.buffer.slice(
           out.byteOffset,

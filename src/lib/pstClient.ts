@@ -6,6 +6,7 @@ import type {
   WorkerRequest,
   WorkerResponse,
 } from '../types'
+import { LAZY_MODE_THRESHOLD_BYTES } from '../types'
 
 // Distributive Omit: applying Omit<T, K> directly to a discriminated union
 // collapses it to the shared-key intersection. This preserves each variant.
@@ -60,21 +61,38 @@ export class PstClient {
   async open(
     file: File
   ): Promise<{ storeName: string; tree: FolderNode }> {
-    const buffer = await file.arrayBuffer()
-    // Transfer (not clone) the buffer into the worker — for a multi-GB PST
-    // this is the difference between one copy in memory and two at the
-    // exact moment memory pressure is highest. `buffer` is detached on the
-    // main thread after this call, which is fine: nothing here reads it
-    // again.
-    const res = await this.call<Extract<WorkerResponse, { kind: 'opened' }>>(
-      {
+    let res: Extract<WorkerResponse, { kind: 'opened' }>
+
+    if (file.size >= LAZY_MODE_THRESHOLD_BYTES) {
+      // Large file: hand the File itself to the worker rather than reading
+      // it here. Structured-cloning a File is cheap — the clone shares the
+      // same underlying disk-backed data, it doesn't copy file contents —
+      // so the worker can read byte ranges on demand and the full file is
+      // never resident in memory at once. See lazyFileSource.ts.
+      res = await this.call<Extract<WorkerResponse, { kind: 'opened' }>>({
         kind: 'open',
         fileName: file.name,
         fileSize: file.size,
-        buffer,
-      },
-      [buffer]
-    )
+        source: { mode: 'lazy', file },
+      })
+    } else {
+      const buffer = await file.arrayBuffer()
+      // Transfer (not clone) the buffer into the worker — for a file near
+      // the threshold this is the difference between one copy in memory
+      // and two at the exact moment memory pressure is highest. `buffer`
+      // is detached on the main thread after this call, which is fine:
+      // nothing here reads it again.
+      res = await this.call<Extract<WorkerResponse, { kind: 'opened' }>>(
+        {
+          kind: 'open',
+          fileName: file.name,
+          fileSize: file.size,
+          source: { mode: 'eager', buffer },
+        },
+        [buffer]
+      )
+    }
+
     return { storeName: res.storeName, tree: res.tree }
   }
 

@@ -6,6 +6,7 @@ import { ReadingPane } from './components/ReadingPane'
 import { TopBar } from './components/TopBar'
 import { PstClient } from './lib/pstClient'
 import type { AttachmentMeta, FolderNode, MessageDetail, MessageSummary } from './types'
+import { LAZY_MODE_THRESHOLD_BYTES } from './types'
 
 function findFolder(node: FolderNode, id: string): FolderNode | null {
   if (node.id === id) return node
@@ -18,15 +19,15 @@ function findFolder(node: FolderNode, id: string): FolderNode | null {
 
 const GB = 1024 ** 3
 
-// The whole file has to sit in memory at once (see README limitations), so
-// give people a heads-up before it's too late to back out. These are rough
-// guidelines, not hard limits — a capable machine can go well past them.
+// Below LAZY_MODE_THRESHOLD_BYTES the whole file is read into memory once,
+// which is simple and fast for anything that comfortably fits. At/above
+// it, pstClient switches to reading the file from disk on demand instead
+// (see lazyFileSource.ts) — memory use stays low regardless of file size,
+// at some cost to browsing speed. Let people know which mode they're
+// getting, since it changes what to expect.
 function largeFileHint(size: number): string | null {
-  if (size > 3 * GB) {
-    return `This file is ${(size / GB).toFixed(1)} GB. Files this large are likely to run the browser tab out of memory — consider closing other tabs first, or splitting the PST in Outlook if that's an option.`
-  }
-  if (size > GB) {
-    return `This file is ${(size / GB).toFixed(1)} GB. It has to be held in memory in full, so on a memory-constrained device this may be slow or the tab may run low on memory.`
+  if (size >= LAZY_MODE_THRESHOLD_BYTES) {
+    return `This file is ${(size / GB).toFixed(1)} GB. Above ${(LAZY_MODE_THRESHOLD_BYTES / GB).toFixed(0)} GB, this app reads it from disk on demand rather than loading it all into memory, so memory use stays low — but browsing may be a bit slower, especially on a slower disk.`
   }
   return null
 }

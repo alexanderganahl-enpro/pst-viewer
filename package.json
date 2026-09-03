@@ -14,7 +14,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "tsx --test src/worker/__tests__/lazyFileSource.test.ts"
   },
   "dependencies": {
     "buffer": "^6.0.3",
@@ -30,6 +31,7 @@
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^4.7.0",
     "oxlint": "^1.79.0",
+    "tsx": "^4.23.13",
     "typescript": "~6.0.2",
     "vite": "^6.4.3",
     "vite-plugin-node-polyfills": "^0.28.0"
