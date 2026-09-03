@@ -74,8 +74,27 @@ sensitive, that sensitivity doesn't change just because the tool reading it is l
 
 ## Limitations
 
-- Very large PST files (multi-GB) are read fully into browser memory, so they're limited by
-  how much memory your browser tab can use.
+- **Very large PST files (multi-GB) are read fully into browser memory**, so they're limited
+  by how much memory your browser tab can use. This is the single biggest limitation and is
+  inherent to the current architecture (see below) rather than a bug — the app warns you
+  before opening a file over ~1 GB. A few things are already done to keep the footprint as
+  low as this architecture allows:
+  - The file buffer is *transferred*, not copied, into the parsing worker, so opening a file
+    doesn't briefly need 2x its size in memory.
+  - Closing a file (or opening a new one) terminates the worker outright, releasing
+    everything it was holding — no gradual leak across files opened in one session.
+  - Only the last few folders you've browsed are kept parsed in memory; older ones are
+    evicted (LRU) so panning around a mailbox with many huge folders doesn't accumulate
+    without bound.
+  - What none of this changes: the underlying PST parser (`pst-extractor`) requires
+    random access across the *whole* file, so the full file still has to be resident at
+    once — there's no way to page it in from disk in this architecture. Doing so would mean
+    replacing `pst-extractor`'s buffer-backed reads with reads against the `File` object
+    itself (e.g. `File.slice()` + the in-worker-only `FileReaderSync`, so pst-extractor's
+    synchronous read calls keep working), which effectively means forking its I/O layer.
+    That's a real option for anyone who wants to take it on — tracked in
+    [#1](https://github.com/creedofman/pst-viewer/issues/1) — but it hasn't been done here
+    yet.
 - Calendar, contact, and task items aren't rendered with dedicated views yet — this first
   release focuses on mail.
 - RTF-only message bodies (no plain text or HTML alternative) aren't rendered; this is

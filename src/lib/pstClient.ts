@@ -46,11 +46,14 @@ export class PstClient {
     }
   }
 
-  private call<T extends WorkerResponse>(req: WorkerRequestNoId): Promise<T> {
+  private call<T extends WorkerResponse>(
+    req: WorkerRequestNoId,
+    transfer?: Transferable[]
+  ): Promise<T> {
     const reqId = this.nextReqId++
     return new Promise<T>((resolve, reject) => {
       this.pending.set(reqId, { resolve, reject })
-      this.worker.postMessage({ ...req, reqId } as WorkerRequest)
+      this.worker.postMessage({ ...req, reqId } as WorkerRequest, transfer ?? [])
     })
   }
 
@@ -58,12 +61,20 @@ export class PstClient {
     file: File
   ): Promise<{ storeName: string; tree: FolderNode }> {
     const buffer = await file.arrayBuffer()
-    const res = await this.call<Extract<WorkerResponse, { kind: 'opened' }>>({
-      kind: 'open',
-      fileName: file.name,
-      fileSize: file.size,
-      buffer,
-    })
+    // Transfer (not clone) the buffer into the worker — for a multi-GB PST
+    // this is the difference between one copy in memory and two at the
+    // exact moment memory pressure is highest. `buffer` is detached on the
+    // main thread after this call, which is fine: nothing here reads it
+    // again.
+    const res = await this.call<Extract<WorkerResponse, { kind: 'opened' }>>(
+      {
+        kind: 'open',
+        fileName: file.name,
+        fileSize: file.size,
+        buffer,
+      },
+      [buffer]
+    )
     return { storeName: res.storeName, tree: res.tree }
   }
 

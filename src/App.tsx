@@ -16,6 +16,21 @@ function findFolder(node: FolderNode, id: string): FolderNode | null {
   return null
 }
 
+const GB = 1024 ** 3
+
+// The whole file has to sit in memory at once (see README limitations), so
+// give people a heads-up before it's too late to back out. These are rough
+// guidelines, not hard limits — a capable machine can go well past them.
+function largeFileHint(size: number): string | null {
+  if (size > 3 * GB) {
+    return `This file is ${(size / GB).toFixed(1)} GB. Files this large are likely to run the browser tab out of memory — consider closing other tabs first, or splitting the PST in Outlook if that's an option.`
+  }
+  if (size > GB) {
+    return `This file is ${(size / GB).toFixed(1)} GB. It has to be held in memory in full, so on a memory-constrained device this may be slow or the tab may run low on memory.`
+  }
+  return null
+}
+
 function downloadBlob(filename: string, mimeType: string, buffer: ArrayBuffer) {
   const blob = new Blob([buffer], { type: mimeType })
   const url = URL.createObjectURL(blob)
@@ -222,7 +237,10 @@ export default function App() {
           <div className="loading-overlay__card">
             <div className="spinner" />
             <p>Reading {fileName ?? 'file'}…</p>
-            <p className="loading-overlay__hint">Large files can take a little while — everything is happening locally.</p>
+            <p className="loading-overlay__hint">
+              {(fileSize !== null && largeFileHint(fileSize)) ??
+                'Large files can take a little while — everything is happening locally.'}
+            </p>
           </div>
         </div>
       )}

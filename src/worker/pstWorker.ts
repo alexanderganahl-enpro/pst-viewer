@@ -20,11 +20,30 @@ import type {
 
 let pstFile: PSTFile | null = null
 // Folder id -> live PSTFolder instance, so we can re-enter a folder later
-// without re-walking the tree.
+// without re-walking the tree. Folder objects themselves are lightweight
+// (a wrapper over one table row), so this is never cleared during a
+// session — only on 'open'.
 const folderById = new Map<string, PSTFolder>()
+
 // Folder id -> the fully-materialized message list for that folder, cached
-// after the first visit so re-opening a folder is instant.
+// after the first visit so re-opening a folder is instant. Each PSTMessage
+// holds its own decoded property table, so for a mailbox with many large
+// folders this can add up — cap how many folders' worth we keep resident
+// and evict the least-recently-used one once we're over the cap. `Map`
+// preserves insertion order, which is all an LRU needs here: touch moves a
+// key to the end, and the oldest is whatever key iteration yields first.
+const MAX_CACHED_FOLDERS = 5
 const messagesByFolder = new Map<string, PSTMessage[]>()
+
+function touchFolderCache(folderId: string, items: PSTMessage[]) {
+  messagesByFolder.delete(folderId)
+  messagesByFolder.set(folderId, items)
+  while (messagesByFolder.size > MAX_CACHED_FOLDERS) {
+    const oldest = messagesByFolder.keys().next().value
+    if (oldest === undefined) break
+    messagesByFolder.delete(oldest)
+  }
+}
 
 function post(message: WorkerResponse, transfer?: Transferable[]) {
   // @ts-expect-error - postMessage overload with transfer list
@@ -57,7 +76,10 @@ function buildFolderNode(folder: PSTFolder, idPrefix: string): FolderNode {
 
 function loadFolderMessages(folderId: string): PSTMessage[] {
   const cached = messagesByFolder.get(folderId)
-  if (cached) return cached
+  if (cached) {
+    touchFolderCache(folderId, cached) // mark as most-recently-used
+    return cached
+  }
 
   const folder = folderById.get(folderId)
   if (!folder) throw new Error('Unknown folder')
@@ -69,7 +91,7 @@ function loadFolderMessages(folderId: string): PSTMessage[] {
     if (child instanceof PSTMessage) items.push(child)
     child = folder.getNextChild()
   }
-  messagesByFolder.set(folderId, items)
+  touchFolderCache(folderId, items)
   return items
 }
 
