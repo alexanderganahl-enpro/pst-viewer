@@ -8,7 +8,7 @@ is uploaded, streamed, or sent anywhere. There is no backend.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 
-Sibling project to **[msg-viewer](https://github.com/creedofman/msg-viewer)** — same
+Sibling project to **[msg-viewer](https://github.com/alexanderganahl-enpro/msg-viewer)** — same
 Outlook-on-the-web styling, same local-only architecture, same privacy guarantees. Where
 this app reads a whole PST mailbox archive, msg-viewer reads one `.msg` message file at a
 time.
