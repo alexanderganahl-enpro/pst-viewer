@@ -10,7 +10,7 @@ export type ByteRangeReader = (start: number, end: number) => Uint8Array
  * The cache + `Buffer`-shaped-object logic, kept separate from *how* bytes
  * are actually fetched (`readRange`) so it can be unit tested in Node
  * against a real file via `fs.readSync`, without needing a browser's
- * `FileReaderSync` (see src/worker/__tests__/lazyFileSource.test.mjs).
+ * `FileReaderSync` (see src/worker/__tests__/lazyFileSource.test.ts).
  *
  * Verified against pst-extractor@1.12.0's compiled output: `PSTFile`'s
  * in-memory read path is exactly one call site —
@@ -29,6 +29,23 @@ export type ByteRangeReader = (start: number, end: number) => Uint8Array
  * real `Buffer.prototype.copy` so it's never reached — that real one would
  * throw or misbehave on a receiver with no actual typed-array backing.
  */
+export interface LazySource {
+  /** The `Buffer`-shaped object to hand to `new PSTFile(...)`. */
+  source: Buffer
+  /**
+   * Throws unless pst-extractor actually read through our shim.
+   *
+   * Everything here rests on one undocumented assumption: that
+   * `PSTFile.readSync` reaches the file via `this.pstBuffer.copy(...)`. If a
+   * future version changes that, the sentinel silently stops being
+   * consulted and we'd serve whatever its (empty) internals contain —
+   * wrong data rather than a crash. Call this right after constructing
+   * PSTFile, which always reads the 514-byte header, so "never called"
+   * unambiguously means the assumption broke.
+   */
+  assertWasUsed(): void
+}
+
 export function createLazyBufferSource(length: number, readRange: ByteRangeReader): Buffer {
   // Insertion-order Map doubles as an LRU: touching a key re-inserts it at
   // the end, and the least-recently-used entry is whatever key iteration
@@ -82,7 +99,10 @@ export function createLazyBufferSource(length: number, readRange: ByteRangeReade
     return written
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // `any` is deliberate and unavoidable: this object is intentionally *not*
+  // a real Buffer, it just wears Buffer's prototype so pst-extractor's
+  // `instanceof` check passes. Typing it as Buffer would be a lie that
+  // hides the very trick this file exists to document.
   const sentinel: any = Object.create(Buffer.prototype)
   // `length` is a getter-only accessor inherited from Uint8Array.prototype
   // — a plain `sentinel.length = length` assignment throws ("Cannot set
@@ -100,9 +120,37 @@ export function createLazyBufferSource(length: number, readRange: ByteRangeReade
 /** Production wiring: reads go through `File.slice()` + the in-worker-only
  * `FileReaderSync`, so only the byte ranges pst-extractor actually asks
  * for are ever read off disk — never the whole file. */
-export function createLazyFileSource(file: File, length: number): Buffer {
+export function createLazyFileSource(file: File, length: number): LazySource {
   const reader = new FileReaderSync()
-  return createLazyBufferSource(length, (start, end) => {
-    return new Uint8Array(reader.readAsArrayBuffer(file.slice(start, end)))
+  let reads = 0
+
+  const source = createLazyBufferSource(length, (start, end) => {
+    reads++
+    try {
+      return new Uint8Array(reader.readAsArrayBuffer(file.slice(start, end)))
+    } catch (err) {
+      // Unlike eager mode, lazy mode keeps reading from disk for the whole
+      // session, so the file can go away underneath us — moved, deleted, or
+      // edited after being picked. The browser throws NotReadableError;
+      // translate it into something a person can act on.
+      throw new Error(
+        `Could not read from "${file.name}" — the file may have been moved, ` +
+          `deleted, or modified since it was opened. Please open it again. ` +
+          `(${err instanceof Error ? err.message : String(err)})`
+      )
+    }
   })
+
+  return {
+    source,
+    assertWasUsed() {
+      if (reads > 0) return
+      throw new Error(
+        'Internal error: the on-demand file reader was never used, which means ' +
+          'pst-extractor no longer reads through the path this app substitutes ' +
+          'itself into. Refusing to continue rather than risk returning ' +
+          'incorrect data. (Pin pst-extractor to a known-good version.)'
+      )
+    },
+  }
 }

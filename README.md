@@ -19,8 +19,10 @@ and parsed there; it never leaves the tab.
 
 - 📂 Full folder tree, message list, and reading pane — a familiar three-pane layout styled
   after Outlook on the web / Microsoft 365
-- 🔒 100% local: no network requests are made with your data, ever (open DevTools → Network
-  and see for yourself — there's nothing to see)
+- 🔒 100% local: no network requests are made with your data, ever — enforced by a
+  `connect-src 'none'` Content-Security-Policy, not just by convention
+- 🚫 Tracking pixels blocked: remote images and other remote content in a message are
+  blocked by default, so opening mail doesn't tell the sender you read it
 - 👀 Read-only: the file is only ever read, never modified or re-written
 - 📎 View and save attachments locally (as a normal browser download)
 - 🔍 Search within the open folder
@@ -60,12 +62,27 @@ npm run preview
 
 ## Privacy & security notes
 
-- This app makes **no network requests** with your file's contents. It's a static site with
-  no backend to send data to.
+- **The app makes no network requests at all.** It's a static site with no backend, and the
+  shipped bundle contains no `fetch`/`XMLHttpRequest`/`WebSocket` calls whatsoever. This is
+  enforced rather than merely intended: the page ships a
+  `Content-Security-Policy` with `connect-src 'none'`, so the browser blocks any attempt to
+  send data anywhere — including from a future change or a dependency.
+- **Remote content in messages is blocked by default.** This is the one place a "local"
+  mail viewer can leak without meaning to: an HTML email containing
+  `<img src="https://tracker.example/pixel.gif?you=someone">` is a read receipt, telling the
+  sender you opened it, when, and from what IP. Two independent layers stop it — the
+  sanitizer strips remote URLs from attributes, and the message body's iframe carries its own
+  `default-src 'none'` CSP that also catches what attribute-stripping can't see (CSS
+  `url()`, `@import`, webfonts). When a message has blocked content you get a banner and can
+  load it for that one message; doing so is a deliberate, per-message choice.
+- **No scripting in message bodies.** Bodies render in a sandboxed iframe without
+  `allow-scripts`, and are sanitized with DOMPurify first.
+- **Attachment names are treated as hostile.** They come from whoever sent the mail, so
+  they're stripped of bidirectional-override characters (the `invoice.jpg` that's really
+  `.exe` trick), path separators, and control characters before being displayed or used as a
+  download name.
 - Attachment downloads use a local `Blob` URL — the same mechanism any "Save As" button in a
   web app uses. Nothing is sent anywhere first.
-- Message bodies are sanitized and rendered in a sandboxed iframe with scripting disabled as
-  defense in depth, even though everything is already local.
 - The file is only read. This app never writes to, or otherwise modifies, the PST/OST file
   you open.
 

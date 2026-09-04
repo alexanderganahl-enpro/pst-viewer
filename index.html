@@ -9,6 +9,37 @@
       content="Browse Outlook PST files entirely in your browser. Open, read, and export attachments from a .pst file with no upload, no server, and no changes to the original file."
     />
     <meta name="color-scheme" content="light dark" />
+    <!--
+      Enforces this app's core promise at the platform level rather than
+      leaving it to code review: `connect-src 'none'` means no fetch, XHR,
+      WebSocket or beacon can leave this page at all, so an opened PST's
+      contents cannot be transmitted anywhere even if a future change (or a
+      dependency) tried to. A Web Worker inherits its owner document's CSP,
+      so this covers the PST parsing worker too. Message bodies get their
+      own, stricter CSP on their sandboxed iframe (see
+      SandboxedHtmlBody.tsx), which is what stops tracking pixels.
+
+      Notes: 'unsafe-inline' for styles is required by React's inline style
+      attributes — there is deliberately no 'unsafe-inline'/'unsafe-eval'
+      for scripts. frame-src 'self' covers the srcdoc body preview. blob:
+      covers the worker in dev. frame-ancestors is deliberately absent: it
+      is ignored in a <meta> CSP and GitHub Pages can't set headers, so
+      including it would imply protection we don't actually have.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none';
+               script-src 'self';
+               worker-src 'self' blob:;
+               frame-src 'self';
+               child-src 'self' blob:;
+               style-src 'self' 'unsafe-inline';
+               img-src 'self' data:;
+               font-src 'self' data:;
+               connect-src 'none';
+               form-action 'none';
+               base-uri 'none'"
+    />
     <title>PST Viewer — local, in-browser PST file browser</title>
   </head>
   <body>

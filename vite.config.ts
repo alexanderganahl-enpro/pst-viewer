@@ -39,7 +39,18 @@ export default defineConfig({
     plugins: () => [pstPolyfills()],
   },
   build: {
-    target: 'es2020',
+    // Matches tsconfig's `target`, so emitted and type-checked syntax
+    // levels agree.
+    target: 'es2022',
     sourcemap: false,
+    modulePreload: {
+      // Vite's modulepreload polyfill is the only thing in the bundle that
+      // calls fetch(). We ship a strict `connect-src 'none'` CSP and every
+      // browser that supports module workers supports modulepreload
+      // natively, so the polyfill is both blocked and unnecessary —
+      // dropping it keeps "this app makes no network requests" literally
+      // true of the shipped JS.
+      polyfill: false,
+    },
   },
 })

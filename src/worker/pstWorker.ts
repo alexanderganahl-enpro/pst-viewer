@@ -26,30 +26,47 @@ import type {
   WorkerResponse,
 } from '../types'
 import { createLazyFileSource } from './lazyFileSource'
+import { sanitizeFilename } from './sanitizeFilename'
 
-let pstFile: PSTFile | null = null
 // Folder id -> live PSTFolder instance, so we can re-enter a folder later
 // without re-walking the tree. Folder objects themselves are lightweight
 // (a wrapper over one table row), so this is never cleared during a
 // session — only on 'open'.
 const folderById = new Map<string, PSTFolder>()
 
-// Folder id -> the fully-materialized message list for that folder, cached
-// after the first visit so re-opening a folder is instant. Each PSTMessage
-// holds its own decoded property table, so for a mailbox with many large
-// folders this can add up — cap how many folders' worth we keep resident
-// and evict the least-recently-used one once we're over the cap. `Map`
-// preserves insertion order, which is all an LRU needs here: touch moves a
+/** A folder's materialized messages, plus an id index so opening a message
+ * is a hash lookup rather than a linear scan with a Long->string conversion
+ * per message. */
+interface FolderMessages {
+  items: PSTMessage[]
+  byId: Map<string, PSTMessage>
+}
+
+// Cached after a folder's first visit so re-opening it is instant. Each
+// PSTMessage holds its own decoded property table, so this is capped two
+// ways: by folder count, and by total messages retained — five 100k-message
+// folders is a lot of resident state even though it's only five entries.
+// `Map` preserves insertion order, which is all an LRU needs: touch moves a
 // key to the end, and the oldest is whatever key iteration yields first.
 const MAX_CACHED_FOLDERS = 5
-const messagesByFolder = new Map<string, PSTMessage[]>()
+const MAX_CACHED_MESSAGES = 50_000
+const messagesByFolder = new Map<string, FolderMessages>()
 
-function touchFolderCache(folderId: string, items: PSTMessage[]) {
+function cachedMessageCount(): number {
+  let total = 0
+  for (const entry of messagesByFolder.values()) total += entry.items.length
+  return total
+}
+
+function touchFolderCache(folderId: string, entry: FolderMessages) {
   messagesByFolder.delete(folderId)
-  messagesByFolder.set(folderId, items)
-  while (messagesByFolder.size > MAX_CACHED_FOLDERS) {
+  messagesByFolder.set(folderId, entry)
+  while (
+    messagesByFolder.size > MAX_CACHED_FOLDERS ||
+    (messagesByFolder.size > 1 && cachedMessageCount() > MAX_CACHED_MESSAGES)
+  ) {
     const oldest = messagesByFolder.keys().next().value
-    if (oldest === undefined) break
+    if (oldest === undefined || oldest === folderId) break
     messagesByFolder.delete(oldest)
   }
 }
@@ -83,7 +100,7 @@ function buildFolderNode(folder: PSTFolder, idPrefix: string): FolderNode {
   }
 }
 
-function loadFolderMessages(folderId: string): PSTMessage[] {
+function loadFolderMessages(folderId: string): FolderMessages {
   const cached = messagesByFolder.get(folderId)
   if (cached) {
     touchFolderCache(folderId, cached) // mark as most-recently-used
@@ -94,21 +111,29 @@ function loadFolderMessages(folderId: string): PSTMessage[] {
   if (!folder) throw new Error('Unknown folder')
 
   const items: PSTMessage[] = []
+  const byId = new Map<string, PSTMessage>()
   folder.moveChildCursorTo(0)
   let child = folder.getNextChild()
   while (child) {
-    if (child instanceof PSTMessage) items.push(child)
+    if (child instanceof PSTMessage) {
+      items.push(child)
+      byId.set(messageId(child), child)
+    }
     child = folder.getNextChild()
   }
-  touchFolderCache(folderId, items)
-  return items
+  const entry = { items, byId }
+  touchFolderCache(folderId, entry)
+  return entry
 }
 
-function toSummary(message: PSTMessage, index: number): MessageSummary {
+function messageId(message: PSTMessage): string {
+  return message.descriptorNodeId.toString()
+}
+
+function toSummary(message: PSTMessage): MessageSummary {
   const date = message.messageDeliveryTime ?? message.clientSubmitTime
   return {
-    id: `${message.descriptorNodeId.toString()}`,
-    index,
+    id: messageId(message),
     subject: safeText(message.subject) || '(No subject)',
     fromName: safeText(message.senderName),
     fromEmail: safeText(message.senderEmailAddress),
@@ -117,19 +142,22 @@ function toSummary(message: PSTMessage, index: number): MessageSummary {
     preview: safeText(message.bodyPrefix).replace(/\s+/g, ' ').slice(0, 180),
     isRead: message.isRead,
     hasAttachments: message.hasAttachments,
-    attachmentCount: message.numberOfAttachments ?? 0,
     importance: message.importance,
   }
 }
 
 function toAttachmentMeta(attachment: PSTAttachment, index: number): AttachmentMeta {
-  const name = safeText(attachment.longFilename) || safeText(attachment.filename)
+  const rawName = safeText(attachment.longFilename) || safeText(attachment.filename)
+  const fallback = `attachment-${index + 1}`
   return {
     index,
-    filename: name || `attachment-${index + 1}`,
-    size: attachment.size ?? 0,
+    // Sanitized here, at the boundary where untrusted PST data enters the
+    // app, so the name shown in the UI and the name a download is saved
+    // under can never disagree. See sanitizeFilename.ts.
+    filename: rawName ? sanitizeFilename(rawName, fallback) : fallback,
+    size: Math.max(0, attachment.size ?? 0),
     mimeType: safeText(attachment.mimeTag) || 'application/octet-stream',
-    isEmbeddedMessage: !name && !!attachment.embeddedPSTMessage,
+    isEmbeddedMessage: !rawName && !!attachment.embeddedPSTMessage,
   }
 }
 
@@ -160,7 +188,7 @@ function toDetail(message: PSTMessage): MessageDetail {
   }
 
   return {
-    id: `${message.descriptorNodeId.toString()}`,
+    id: messageId(message),
     subject: safeText(message.subject) || '(No subject)',
     fromName: safeText(message.senderName),
     fromEmail: safeText(message.senderEmailAddress),
@@ -175,9 +203,8 @@ function toDetail(message: PSTMessage): MessageDetail {
   }
 }
 
-function findMessage(folderId: string, messageId: string): PSTMessage {
-  const items = loadFolderMessages(folderId)
-  const found = items.find((m) => `${m.descriptorNodeId.toString()}` === messageId)
+function findMessage(folderId: string, id: string): PSTMessage {
+  const found = loadFolderMessages(folderId).byId.get(id)
   if (!found) throw new Error('Message not found in folder')
   return found
 }
@@ -189,11 +216,18 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       case 'open': {
         folderById.clear()
         messagesByFolder.clear()
+        const lazy =
+          req.source.mode === 'lazy'
+            ? createLazyFileSource(req.source.file, req.fileSize)
+            : null
         const buffer =
-          req.source.mode === 'eager'
-            ? Buffer.from(req.source.buffer)
-            : createLazyFileSource(req.source.file, req.fileSize)
-        pstFile = new PSTFile(buffer)
+          req.source.mode === 'eager' ? Buffer.from(req.source.buffer) : lazy!.source
+        const pstFile = new PSTFile(buffer)
+        // Fails loudly if a pst-extractor upgrade ever stops routing reads
+        // through the one call site lazyFileSource.ts substitutes itself
+        // into — otherwise that change would surface as silently wrong
+        // bytes rather than an error. See lazyFileSource.ts.
+        lazy?.assertWasUsed()
         const root = pstFile.getRootFolder()
         const storeName =
           safeText(pstFile.getMessageStore().displayName) || req.fileName
@@ -203,7 +237,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         break
       }
       case 'listFolder': {
-        const items = loadFolderMessages(req.folderId).map(toSummary)
+        const items = loadFolderMessages(req.folderId).items.map(toSummary)
         post({ kind: 'folderListed', reqId: req.reqId, items })
         break
       }
@@ -233,7 +267,10 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         // expects — offset then never advances, and the loop spins at
         // 100% CPU indefinitely. Capping the request to what the stream
         // actually reports avoids ever taking that path.
-        const readLength = Math.min(attachment.size, stream.length.toNumber())
+        const readLength = Math.max(
+          0,
+          Math.min(meta.size, stream.length.toNumber() || 0)
+        )
         const out = Buffer.alloc(readLength)
         stream.readCompletely(out)
         const arrayBuffer = out.buffer.slice(

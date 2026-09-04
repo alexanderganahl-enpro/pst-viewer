@@ -32,9 +32,10 @@ export function EmptyState({ onOpenFile, isDragging, error }: EmptyStateProps) {
         <div className="empty-state__privacy">
           <LockIcon width={16} height={16} />
           <div>
-            <strong>Nothing leaves this tab.</strong> The file is read directly from your disk into
-            browser memory and parsed by JavaScript running locally — this app has no server and
-            makes no network requests with your data.
+            <strong>Nothing leaves this tab.</strong> The file is read directly from your disk
+            and parsed by JavaScript running locally — this app has no server, and its content
+            security policy blocks it from making any network request at all. Tracking pixels
+            in messages are blocked too.
           </div>
         </div>
 

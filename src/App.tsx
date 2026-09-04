@@ -4,7 +4,7 @@ import { FolderTree } from './components/FolderTree'
 import { MessageList } from './components/MessageList'
 import { ReadingPane } from './components/ReadingPane'
 import { TopBar } from './components/TopBar'
-import { PstClient } from './lib/pstClient'
+import { PstCancelledError, PstClient } from './lib/pstClient'
 import type { AttachmentMeta, FolderNode, MessageDetail, MessageSummary } from './types'
 import { LAZY_MODE_THRESHOLD_BYTES } from './types'
 
@@ -58,10 +58,12 @@ export default function App() {
   const [selectedFolder, setSelectedFolder] = useState<FolderNode | null>(null)
   const [messages, setMessages] = useState<MessageSummary[]>([])
   const [messagesLoading, setMessagesLoading] = useState(false)
+  const [folderError, setFolderError] = useState<string | null>(null)
 
   const [selectedMessage, setSelectedMessage] = useState<MessageDetail | null>(null)
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null)
   const [messageLoading, setMessageLoading] = useState(false)
+  const [messageError, setMessageError] = useState<string | null>(null)
 
   const reset = useCallback(() => {
     clientRef.current?.dispose()
@@ -74,6 +76,8 @@ export default function App() {
     setSelectedMessage(null)
     setSelectedMessageId(null)
     setOpenError(null)
+    setFolderError(null)
+    setMessageError(null)
   }, [])
 
   const openFile = useCallback(async (file: File) => {
@@ -122,16 +126,18 @@ export default function App() {
     setMessagesLoading(true)
     setSelectedMessage(null)
     setSelectedMessageId(null)
+    setMessageError(null)
+    setFolderError(null)
     client
       .listFolder(selectedFolder.id)
       .then((items) => {
         if (!cancelled) setMessages(items)
       })
       .catch((err) => {
-        if (!cancelled) {
-          console.error(err)
-          setMessages([])
-        }
+        if (cancelled || err instanceof PstCancelledError) return
+        console.error(err)
+        setMessages([])
+        setFolderError(err instanceof Error ? err.message : 'Could not read this folder.')
       })
       .finally(() => {
         if (!cancelled) setMessagesLoading(false)
@@ -141,20 +147,34 @@ export default function App() {
     }
   }, [selectedFolder])
 
+  // Tracks the most recently requested message so a slow earlier response
+  // can't overwrite a newer selection when they resolve out of order.
+  const latestMessageRequest = useRef<string | null>(null)
+
   const handleSelectMessage = useCallback(
     (message: MessageSummary) => {
       const client = clientRef.current
       if (!client || !selectedFolder) return
+      latestMessageRequest.current = message.id
       setSelectedMessageId(message.id)
       setMessageLoading(true)
+      setMessageError(null)
       client
         .getMessage(selectedFolder.id, message.id)
-        .then((detail) => setSelectedMessage(detail))
+        .then((detail) => {
+          if (latestMessageRequest.current !== message.id) return
+          setSelectedMessage(detail)
+        })
         .catch((err) => {
+          if (latestMessageRequest.current !== message.id) return
+          if (err instanceof PstCancelledError) return
           console.error(err)
           setSelectedMessage(null)
+          setMessageError(err instanceof Error ? err.message : 'Could not open this message.')
         })
-        .finally(() => setMessageLoading(false))
+        .finally(() => {
+          if (latestMessageRequest.current === message.id) setMessageLoading(false)
+        })
     },
     [selectedFolder]
   )
@@ -163,12 +183,24 @@ export default function App() {
     async (attachment: AttachmentMeta) => {
       const client = clientRef.current
       if (!client || !selectedFolder || !selectedMessageId) return
-      const { filename, mimeType, buffer } = await client.getAttachment(
-        selectedFolder.id,
-        selectedMessageId,
-        attachment.index
-      )
-      downloadBlob(filename, mimeType, buffer)
+      try {
+        const { filename, mimeType, buffer } = await client.getAttachment(
+          selectedFolder.id,
+          selectedMessageId,
+          attachment.index
+        )
+        downloadBlob(filename, mimeType, buffer)
+      } catch (err) {
+        // Without this the rejection escapes as an unhandled promise
+        // rejection and the user sees nothing at all.
+        if (err instanceof PstCancelledError) return
+        console.error(err)
+        setMessageError(
+          err instanceof Error
+            ? `Couldn't save "${attachment.filename}": ${err.message}`
+            : `Couldn't save "${attachment.filename}".`
+        )
+      }
     },
     [selectedFolder, selectedMessageId]
   )
@@ -218,17 +250,29 @@ export default function App() {
             <FolderTree
               root={tree}
               selectedId={selectedFolder?.id ?? null}
-              onSelect={(folder) => setSelectedFolder(findFolder(tree, folder.id))}
+              onSelect={(folder) => {
+                // Invalidate any in-flight message request before the folder
+                // changes, so a late reply can't land in the new folder's pane.
+                latestMessageRequest.current = null
+                setSelectedFolder(findFolder(tree, folder.id))
+              }}
             />
           </aside>
           <MessageList
+            key={selectedFolder?.id}
             folder={selectedFolder}
             messages={messages}
             loading={messagesLoading}
+            error={folderError}
             selectedId={selectedMessageId}
             onSelect={handleSelectMessage}
           />
-          <ReadingPane message={selectedMessage} loading={messageLoading} onDownloadAttachment={handleDownloadAttachment} />
+          <ReadingPane
+            message={selectedMessage}
+            loading={messageLoading}
+            error={messageError}
+            onDownloadAttachment={handleDownloadAttachment}
+          />
         </div>
       ) : (
         <EmptyState onOpenFile={(f) => void openFile(f)} isDragging={isDragging} error={openError} />
@@ -239,7 +283,9 @@ export default function App() {
             <div className="spinner" />
             <p>Reading {fileName ?? 'file'}…</p>
             <p className="loading-overlay__hint">
-              {(fileSize !== null && largeFileHint(fileSize)) ??
+              {/* `??` would not catch the `false` that `&&` yields when
+                  fileSize is null, so the fallback never rendered. */}
+              {(fileSize !== null ? largeFileHint(fileSize) : null) ||
                 'Large files can take a little while — everything is happening locally.'}
             </p>
           </div>

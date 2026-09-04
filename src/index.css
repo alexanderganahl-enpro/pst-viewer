@@ -538,6 +538,26 @@ button {
   font-size: 13px;
 }
 
+.pane-status--error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  text-align: left;
+  color: var(--danger);
+}
+
+.pane-status--inline {
+  margin: 12px 24px 0;
+  padding: 10px 12px;
+  background: rgba(196, 49, 75, 0.1);
+  border-radius: var(--radius-sm);
+}
+
+.pane-status--error svg {
+  flex: none;
+  margin-top: 1px;
+}
+
 /* ---------------------------------------------------------------------
    Reading pane
    -------------------------------------------------------------------- */
@@ -683,10 +703,71 @@ button {
   padding: 16px 24px 32px;
 }
 
+.remote-content-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: #fff4ce;
+  border: 1px solid #f2d98c;
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  color: #6b5310;
+  line-height: 1.45;
+}
+
+.remote-content-banner svg {
+  flex: none;
+  color: #a37f14;
+}
+
+.remote-content-banner span {
+  flex: 1;
+  min-width: 0;
+}
+
+.remote-content-banner button {
+  flex: none;
+  border: 1px solid #d8b95a;
+  background: transparent;
+  color: #6b5310;
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.remote-content-banner button:hover {
+  background: rgba(163, 127, 20, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  .remote-content-banner {
+    background: #3a2f0d;
+    border-color: #5d4c17;
+    color: #f0d68a;
+  }
+
+  .remote-content-banner svg {
+    color: #e0c165;
+  }
+
+  .remote-content-banner button {
+    border-color: #6f5a1c;
+    color: #f0d68a;
+  }
+}
+
 .message-body-frame {
   width: 100%;
   border: none;
   display: block;
+  /* The frame renders untrusted email HTML on its own white page; keep that
+     white regardless of app theme so dark-mode text in the message stays
+     legible. */
+  background: #ffffff;
 }
 
 .message-body__plain {

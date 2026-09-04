@@ -6,6 +6,7 @@ import { SandboxedHtmlBody } from './SandboxedHtmlBody'
 interface ReadingPaneProps {
   message: MessageDetail | null
   loading: boolean
+  error: string | null
   onDownloadAttachment: (attachment: AttachmentMeta) => Promise<void>
 }
 
@@ -37,7 +38,12 @@ function initials(name: string, email: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
 }
 
-export function ReadingPane({ message, loading, onDownloadAttachment }: ReadingPaneProps) {
+export function ReadingPane({
+  message,
+  loading,
+  error,
+  onDownloadAttachment,
+}: ReadingPaneProps) {
   const [pending, setPending] = useState<number | null>(null)
 
   if (loading) {
@@ -51,10 +57,17 @@ export function ReadingPane({ message, loading, onDownloadAttachment }: ReadingP
   if (!message) {
     return (
       <section className="reading-pane">
-        <div className="reading-pane__placeholder">
-          <MailIcon width={40} height={40} />
-          <p>Select an item to read</p>
-        </div>
+        {error ? (
+          <div className="pane-status pane-status--error">
+            <AlertIcon width={16} height={16} />
+            <span>{error}</span>
+          </div>
+        ) : (
+          <div className="reading-pane__placeholder">
+            <MailIcon width={40} height={40} />
+            <p>Select an item to read</p>
+          </div>
+        )}
       </section>
     )
   }
@@ -62,6 +75,9 @@ export function ReadingPane({ message, loading, onDownloadAttachment }: ReadingP
   const handleDownload = async (attachment: AttachmentMeta) => {
     setPending(attachment.index)
     try {
+      // Errors are reported by the caller (which owns the error banner);
+      // this only has to make sure the failure can't escape as an unhandled
+      // rejection and leave the button stuck in its pending state.
       await onDownloadAttachment(attachment)
     } finally {
       setPending(null)
@@ -71,6 +87,12 @@ export function ReadingPane({ message, loading, onDownloadAttachment }: ReadingP
   return (
     <section className="reading-pane" aria-label="Reading pane">
       <div className="reading-pane__scroll">
+        {error && (
+          <div className="pane-status pane-status--error pane-status--inline">
+            <AlertIcon width={16} height={16} />
+            <span>{error}</span>
+          </div>
+        )}
         <header className="message-header">
           <h1 className="message-header__subject">
             {message.importance === 2 && (

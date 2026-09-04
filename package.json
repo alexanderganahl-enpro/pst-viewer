@@ -15,21 +15,24 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "tsx --test src/worker/__tests__/lazyFileSource.test.ts"
+    "test": "tsx --test \"src/**/__tests__/**/*.test.ts\"",
+    "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
     "buffer": "^6.0.3",
     "dompurify": "^3.4.14",
-    "pst-extractor": "^1.12.0",
+    "pst-extractor": "1.12.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@types/dompurify": "^3.2.0",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^4.7.0",
+    "jsdom": "^30.0.1",
     "oxlint": "^1.79.0",
     "tsx": "^4.23.13",
     "typescript": "~6.0.2",

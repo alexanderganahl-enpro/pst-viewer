@@ -1,6 +1,9 @@
 /** Shared types passed between the main thread and the PST parsing worker.
- *  Everything here has to be structured-clone friendly (no class instances,
- *  no Long, no Buffer) since it crosses a postMessage boundary. */
+ *
+ *  Everything here has to survive structured cloning, so no library class
+ *  instances (no Long, no Buffer) — but the platform types the algorithm
+ *  natively clones, notably File and ArrayBuffer, are fine and are used
+ *  deliberately in the open request. */
 
 export interface FolderNode {
   id: string
@@ -12,7 +15,6 @@ export interface FolderNode {
 
 export interface MessageSummary {
   id: string
-  index: number
   subject: string
   fromName: string
   fromEmail: string
@@ -21,7 +23,6 @@ export interface MessageSummary {
   preview: string
   isRead: boolean
   hasAttachments: boolean
-  attachmentCount: number
   importance: number
 }
 
@@ -46,13 +47,6 @@ export interface MessageDetail {
   bodyHtml: string | null
   bodyText: string | null
   attachments: AttachmentMeta[]
-}
-
-export interface OpenedFile {
-  fileName: string
-  fileSize: number
-  storeName: string
-  tree: FolderNode
 }
 
 /** Files at or above this size are opened in "lazy" mode: the worker reads

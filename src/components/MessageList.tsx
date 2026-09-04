@@ -1,12 +1,13 @@
-import { useMemo, useState } from 'react'
+import { useDeferredValue, useMemo, useState } from 'react'
 import type { FolderNode, MessageSummary } from '../types'
-import { PaperclipIcon, SearchIcon } from './Icons'
+import { AlertIcon, PaperclipIcon, SearchIcon } from './Icons'
 import { VirtualList } from './VirtualList'
 
 interface MessageListProps {
   folder: FolderNode | null
   messages: MessageSummary[]
   loading: boolean
+  error: string | null
   selectedId: string | null
   onSelect: (message: MessageSummary) => void
 }
@@ -31,20 +32,39 @@ function formatDate(iso: string | null): string {
   })
 }
 
-export function MessageList({ folder, messages, loading, selectedId, onSelect }: MessageListProps) {
+export function MessageList({
+  folder,
+  messages,
+  loading,
+  error,
+  selectedId,
+  onSelect,
+}: MessageListProps) {
   const [query, setQuery] = useState('')
 
+  // A search belongs to the folder it was typed in. App keys this component
+  // by folder id, so switching folders remounts it and clears the query
+  // without an effect chasing the prop.
+
+  // One lowercase pass per folder load instead of four per message on every
+  // keystroke.
+  const haystacks = useMemo(
+    () =>
+      messages.map((m) =>
+        `${m.subject}\n${m.fromName}\n${m.fromEmail}\n${m.preview}`.toLowerCase()
+      ),
+    [messages]
+  )
+
+  // Keeps typing responsive on very large folders: React renders the input
+  // immediately and the filtered list catches up.
+  const deferredQuery = useDeferredValue(query)
+
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
+    const q = deferredQuery.trim().toLowerCase()
     if (!q) return messages
-    return messages.filter(
-      (m) =>
-        m.subject.toLowerCase().includes(q) ||
-        m.fromName.toLowerCase().includes(q) ||
-        m.fromEmail.toLowerCase().includes(q) ||
-        m.preview.toLowerCase().includes(q)
-    )
-  }, [messages, query])
+    return messages.filter((_, i) => haystacks[i].includes(q))
+  }, [messages, haystacks, deferredQuery])
 
   return (
     <section className="message-list-pane">
@@ -66,10 +86,16 @@ export function MessageList({ folder, messages, loading, selectedId, onSelect }:
       </div>
       {loading ? (
         <div className="pane-status">Reading folder…</div>
+      ) : error ? (
+        <div className="pane-status pane-status--error">
+          <AlertIcon width={16} height={16} />
+          <span>{error}</span>
+        </div>
       ) : (
         <VirtualList
           items={filtered}
           rowHeight={72}
+          getKey={(m) => m.id}
           emptyState={
             <div className="pane-status">
               {folder ? (query ? 'No messages match your search.' : 'This folder is empty.') : 'Select a folder to view its messages.'}

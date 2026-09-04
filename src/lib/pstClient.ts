@@ -13,15 +13,51 @@ import { LAZY_MODE_THRESHOLD_BYTES } from '../types'
 type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never
 type WorkerRequestNoId = DistributiveOmit<WorkerRequest, 'reqId'>
 
+/** Thrown when a request is abandoned because the client was disposed —
+ * expected during teardown, so callers can ignore it rather than surfacing
+ * it as a failure. */
+export class PstCancelledError extends Error {
+  constructor() {
+    super('Request cancelled')
+    this.name = 'PstCancelledError'
+  }
+}
+
+/**
+ * Per-request-kind deadlines.
+ *
+ * These are generous, because the legitimate work varies by orders of
+ * magnitude: opening a multi-GB archive or listing a folder with 100k
+ * messages really can take minutes. The point isn't to police slowness,
+ * it's that the worker does its parsing synchronously — so a pathological
+ * input that sends it into a spin (exactly the class of bug that
+ * `readCompletely` had) would otherwise leave a spinner up forever with no
+ * way back. A blown deadline means the worker is wedged and unrecoverable,
+ * so we tear it down rather than pretend it might still answer.
+ */
+const TIMEOUTS_MS: Record<string, number> = {
+  open: 15 * 60_000,
+  listFolder: 10 * 60_000,
+  getMessage: 2 * 60_000,
+  getAttachment: 5 * 60_000,
+}
+
+interface PendingEntry {
+  resolve: (value: never) => void
+  reject: (error: Error) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
 /** Promise-based wrapper around the PST parsing worker. One instance is
  * created per opened file; call dispose() when done with it. */
 export class PstClient {
   private worker: Worker
   private nextReqId = 1
-  private pending = new Map<
-    number,
-    { resolve: (v: any) => void; reject: (e: Error) => void }
-  >()
+  private pending = new Map<number, PendingEntry>()
+  /** Set once the worker is gone (disposed, crashed, or timed out); every
+   * later call fails fast instead of hanging on a thread that will never
+   * answer. */
+  private deadReason: string | null = null
 
   constructor() {
     this.worker = new Worker(new URL('../worker/pstWorker.ts', import.meta.url), {
@@ -32,18 +68,27 @@ export class PstClient {
       const entry = this.pending.get(res.reqId)
       if (!entry) return
       this.pending.delete(res.reqId)
+      clearTimeout(entry.timer)
       if (res.kind === 'error') {
         entry.reject(new Error(res.message))
       } else {
-        entry.resolve(res)
+        entry.resolve(res as never)
       }
     }
     this.worker.onerror = (event) => {
-      // Fails every still-pending request; the worker thread itself is
-      // still alive (this fires on uncaught errors inside handlers).
-      const error = new Error(event.message || 'PST worker crashed')
-      for (const [, entry] of this.pending) entry.reject(error)
-      this.pending.clear()
+      this.failAll(new Error(event.message || 'PST worker crashed'))
+    }
+  }
+
+  /** Rejects every in-flight request. Without this, a teardown would leave
+   * callers awaiting a promise that can never settle — a stuck spinner and
+   * a leaked async frame apiece. */
+  private failAll(error: Error) {
+    const entries = [...this.pending.values()]
+    this.pending.clear()
+    for (const entry of entries) {
+      clearTimeout(entry.timer)
+      entry.reject(error)
     }
   }
 
@@ -51,9 +96,27 @@ export class PstClient {
     req: WorkerRequestNoId,
     transfer?: Transferable[]
   ): Promise<T> {
+    if (this.deadReason) return Promise.reject(new Error(this.deadReason))
+
     const reqId = this.nextReqId++
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(reqId, { resolve, reject })
+      const timeoutMs = TIMEOUTS_MS[req.kind] ?? 5 * 60_000
+      const timer = setTimeout(() => {
+        this.deadReason =
+          `The PST reader stopped responding while handling "${req.kind}" ` +
+          `(no result after ${Math.round(timeoutMs / 60_000)} minutes). ` +
+          `This usually means the file has a structure it can't parse. ` +
+          `Please reopen the file to try again.`
+        const reason = this.deadReason
+        this.worker.terminate()
+        this.failAll(new Error(reason))
+      }, timeoutMs)
+
+      this.pending.set(reqId, {
+        resolve: resolve as (value: never) => void,
+        reject,
+        timer,
+      })
       this.worker.postMessage({ ...req, reqId } as WorkerRequest, transfer ?? [])
     })
   }
@@ -128,8 +191,9 @@ export class PstClient {
   }
 
   dispose() {
+    if (!this.deadReason) this.deadReason = 'This file was closed.'
     this.worker.terminate()
-    this.pending.clear()
+    this.failAll(new PstCancelledError())
   }
 }
 
