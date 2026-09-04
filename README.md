@@ -4,7 +4,7 @@ A small, open-source PST file browser that runs **entirely in your browser**. Op
 Outlook `.pst` (or `.ost`) file and browse its folders, messages, and attachments — nothing
 is uploaded, streamed, or sent anywhere. There is no backend.
 
-**[Open the app →](https://creedofman.github.io/pst-viewer/)**
+**[Open the app →](https://alexanderganahl-enpro.github.io/pst-viewer/)**
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 
