@@ -18,9 +18,13 @@ permissions:
   pages: write
   id-token: write
 
+# One deployment at a time, but never cancel one that is already
+# running: two branches publish this site, and cancelling a deploy
+# mid-flight is what GitHub's own Pages guidance warns against — a
+# superseded run fails rather than yielding cleanly.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   PREVIEW_BRANCH: perf/fast-folder-load
