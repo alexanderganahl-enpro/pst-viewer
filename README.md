@@ -8,10 +8,9 @@ is uploaded, streamed, or sent anywhere. There is no backend.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 
-> This branch adds archive-wide search, backed by a background header index — see
-> [Background search index](#background-search-index) below. It's deployed alongside main for
-> testing at **[/new →](https://creedofman.github.io/pst-viewer/new/)**; main is unaffected
-> until this is merged.
+> In-progress work sometimes gets a live preview at
+> **[/new →](https://creedofman.github.io/pst-viewer/new/)** before it merges to main — see
+> `preview` in the branch list if you're looking for what's there right now.
 
 Sibling project to **[msg-viewer](https://github.com/creedofman/msg-viewer)** — same
 Outlook-on-the-web styling, same local-only architecture, same privacy guarantees. Where

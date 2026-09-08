@@ -1,8 +1,9 @@
 name: Deploy to GitHub Pages
 
-# A repository gets exactly one Pages site, so the production build and the
-# background-indexing preview share it: main is published at the root and
-# this branch at /new/.
+# A repository gets exactly one Pages site, so production and in-progress
+# work share it: main is published at the root, and whatever's currently on
+# the long-lived `preview` branch (see PREVIEW_BRANCH below) is published
+# alongside it at /new/, for testing before it merges to main.
 #
 # Both branches run this same workflow, and it always rebuilds *both*
 # targets. That matters — if each branch only published itself, whichever
@@ -10,7 +11,7 @@ name: Deploy to GitHub Pages
 # whole site rather than merging into it.
 on:
   push:
-    branches: [main, feature/background-search-index]
+    branches: [main, preview]
   workflow_dispatch:
 
 permissions:
@@ -26,7 +27,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PREVIEW_BRANCH: feature/background-search-index
+  # Points at whichever branch is currently staged for testing at /new.
+  # Reset this branch (or just this pointer) to whatever's next once the
+  # current preview merges into main — the pipeline itself doesn't need to
+  # change per feature.
+  PREVIEW_BRANCH: preview
 
 jobs:
   build:
@@ -38,8 +43,8 @@ jobs:
           ref: main
           path: main
 
-      # Tolerated failure: once this branch is merged or abandoned and
-      # deleted, main should keep deploying on its own rather than
+      # Tolerated failure: if the preview branch is ever deleted or not
+      # yet created, main should keep deploying on its own rather than
       # breaking on a missing ref.
       - name: Check out preview branch
         id: preview
