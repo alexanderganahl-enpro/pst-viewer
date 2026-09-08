@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ArchiveSearch } from './components/ArchiveSearch'
 import { EmptyState } from './components/EmptyState'
 import { FolderTree } from './components/FolderTree'
+import { IndexingStatus } from './components/IndexingStatus'
 import { MessageList } from './components/MessageList'
 import { ReadingPane } from './components/ReadingPane'
 import { TopBar } from './components/TopBar'
 import { PstCancelledError, PstClient } from './lib/pstClient'
-import type { AttachmentMeta, FolderNode, MessageDetail, MessageSummary } from './types'
+import type { AttachmentMeta, FolderNode, IndexProgress, MessageDetail, MessageSummary, SearchHit } from './types'
 import { LAZY_MODE_THRESHOLD_BYTES } from './types'
 
 function findFolder(node: FolderNode, id: string): FolderNode | null {
@@ -65,6 +67,9 @@ export default function App() {
   const [messageLoading, setMessageLoading] = useState(false)
   const [messageError, setMessageError] = useState<string | null>(null)
 
+  const [indexProgress, setIndexProgress] = useState<IndexProgress | null>(null)
+  const [archiveSearchOpen, setArchiveSearchOpen] = useState(false)
+
   const reset = useCallback(() => {
     clientRef.current?.dispose()
     clientRef.current = null
@@ -78,6 +83,8 @@ export default function App() {
     setOpenError(null)
     setFolderError(null)
     setMessageError(null)
+    setIndexProgress(null)
+    setArchiveSearchOpen(false)
   }, [])
 
   const openFile = useCallback(async (file: File) => {
@@ -92,7 +99,9 @@ export default function App() {
     setFileName(file.name)
     setFileSize(file.size)
     clientRef.current?.dispose()
+    setIndexProgress(null)
     const client = new PstClient()
+    client.onIndexProgress(setIndexProgress)
     clientRef.current = client
 
     try {
@@ -115,6 +124,56 @@ export default function App() {
     }
   }, [])
 
+  // Tracks the most recently requested message so a slow earlier response
+  // can't overwrite a newer selection when they resolve out of order.
+  const latestMessageRequest = useRef<string | null>(null)
+
+  // Core message-open logic, addressed by folder + message id rather than a
+  // MessageSummary object — shared by the normal "click a row in the
+  // currently-open folder" path (handleSelectMessage) and archive search's
+  // "jump to a message in any folder" path (handleSelectHit), both of which
+  // resolve to the same unchanged getMessage() call.
+  const selectMessage = useCallback((folderId: string, messageId: string) => {
+    const client = clientRef.current
+    if (!client) return
+    latestMessageRequest.current = messageId
+    setSelectedMessageId(messageId)
+    setMessageLoading(true)
+    setMessageError(null)
+    client
+      .getMessage(folderId, messageId)
+      .then((detail) => {
+        if (latestMessageRequest.current !== messageId) return
+        setSelectedMessage(detail)
+      })
+      .catch((err) => {
+        if (latestMessageRequest.current !== messageId) return
+        if (err instanceof PstCancelledError) return
+        console.error(err)
+        setSelectedMessage(null)
+        setMessageError(err instanceof Error ? err.message : 'Could not open this message.')
+      })
+      .finally(() => {
+        if (latestMessageRequest.current === messageId) setMessageLoading(false)
+      })
+  }, [])
+
+  const handleSelectMessage = useCallback(
+    (message: MessageSummary) => {
+      if (!selectedFolder) return
+      selectMessage(selectedFolder.id, message.id)
+    },
+    [selectedFolder, selectMessage]
+  )
+
+  // Set by handleSelectHit right before switching folders, so the
+  // folder-load effect below can open the target message once that
+  // folder's listing has (re)loaded — jumping to a search hit in a folder
+  // that isn't already open needs to wait for that round-trip; jumping to
+  // one in the currently-open folder (handled directly in handleSelectHit)
+  // does not.
+  const pendingSelectMessageId = useRef<string | null>(null)
+
   // Load the message list whenever the selected folder changes.
   useEffect(() => {
     const client = clientRef.current
@@ -124,14 +183,20 @@ export default function App() {
     }
     let cancelled = false
     setMessagesLoading(true)
-    setSelectedMessage(null)
-    setSelectedMessageId(null)
+    const pendingId = pendingSelectMessageId.current
+    pendingSelectMessageId.current = null
+    if (!pendingId) {
+      setSelectedMessage(null)
+      setSelectedMessageId(null)
+    }
     setMessageError(null)
     setFolderError(null)
     client
       .listFolder(selectedFolder.id)
       .then((items) => {
-        if (!cancelled) setMessages(items)
+        if (cancelled) return
+        setMessages(items)
+        if (pendingId) selectMessage(selectedFolder.id, pendingId)
       })
       .catch((err) => {
         if (cancelled || err instanceof PstCancelledError) return
@@ -145,38 +210,26 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [selectedFolder])
+  }, [selectedFolder, selectMessage])
 
-  // Tracks the most recently requested message so a slow earlier response
-  // can't overwrite a newer selection when they resolve out of order.
-  const latestMessageRequest = useRef<string | null>(null)
-
-  const handleSelectMessage = useCallback(
-    (message: MessageSummary) => {
-      const client = clientRef.current
-      if (!client || !selectedFolder) return
-      latestMessageRequest.current = message.id
-      setSelectedMessageId(message.id)
-      setMessageLoading(true)
-      setMessageError(null)
-      client
-        .getMessage(selectedFolder.id, message.id)
-        .then((detail) => {
-          if (latestMessageRequest.current !== message.id) return
-          setSelectedMessage(detail)
-        })
-        .catch((err) => {
-          if (latestMessageRequest.current !== message.id) return
-          if (err instanceof PstCancelledError) return
-          console.error(err)
-          setSelectedMessage(null)
-          setMessageError(err instanceof Error ? err.message : 'Could not open this message.')
-        })
-        .finally(() => {
-          if (latestMessageRequest.current === message.id) setMessageLoading(false)
-        })
+  // Resolves an archive-search hit to a real message, via the same
+  // selectMessage() the folder list itself uses — never a separate,
+  // search-only code path.
+  const handleSelectHit = useCallback(
+    (hit: SearchHit) => {
+      if (!tree) return
+      const folder = findFolder(tree, hit.folderId)
+      if (!folder) return
+      setArchiveSearchOpen(false)
+      if (selectedFolder?.id === folder.id) {
+        selectMessage(hit.folderId, hit.messageId)
+        return
+      }
+      latestMessageRequest.current = null
+      pendingSelectMessageId.current = hit.messageId
+      setSelectedFolder(folder)
     },
-    [selectedFolder]
+    [tree, selectedFolder, selectMessage]
   )
 
   const handleDownloadAttachment = useCallback(
@@ -243,7 +296,22 @@ export default function App() {
 
   return (
     <div className="app">
-      <TopBar fileName={fileName} fileSize={fileSize} onOpenFile={(f) => void openFile(f)} onClose={reset} />
+      <TopBar
+        fileName={fileName}
+        fileSize={fileSize}
+        onOpenFile={(f) => void openFile(f)}
+        onClose={reset}
+        onSearchArchive={tree ? () => setArchiveSearchOpen(true) : undefined}
+      />
+      {tree && indexProgress && (
+        <IndexingStatus
+          progress={indexProgress}
+          onPause={() => void clientRef.current?.controlIndex('pause')}
+          onResume={() => void clientRef.current?.controlIndex('resume')}
+          onStop={() => void clientRef.current?.controlIndex('stop')}
+          onClearCache={() => void clientRef.current?.controlIndex('clearCache')}
+        />
+      )}
       {tree ? (
         <div className="app__body">
           <aside className="app__folders">
@@ -276,6 +344,14 @@ export default function App() {
         </div>
       ) : (
         <EmptyState onOpenFile={(f) => void openFile(f)} isDragging={isDragging} error={openError} />
+      )}
+      {archiveSearchOpen && tree && (
+        <ArchiveSearch
+          onSearch={(query) => clientRef.current!.searchArchive(query)}
+          onSelectHit={handleSelectHit}
+          onClose={() => setArchiveSearchOpen(false)}
+          indexedMessages={indexProgress?.indexedMessages ?? 0}
+        />
       )}
       {opening && (
         <div className="loading-overlay">

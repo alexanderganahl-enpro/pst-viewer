@@ -140,3 +140,28 @@ export function AlertIcon(props: IconProps) {
     </svg>
   )
 }
+
+export function PauseIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M6.5 4.5v11" />
+      <path d="M13.5 4.5v11" />
+    </svg>
+  )
+}
+
+export function PlayIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M6 4.2v11.6l9-5.8z" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+export function CheckIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 10.5l4 4 8-9" />
+    </svg>
+  )
+}

@@ -1,8 +1,16 @@
 name: Deploy to GitHub Pages
 
+# A repository gets exactly one Pages site, so the production build and the
+# background-indexing preview share it: main is published at the root and
+# this branch at /new/.
+#
+# Both branches run this same workflow, and it always rebuilds *both*
+# targets. That matters — if each branch only published itself, whichever
+# deployed last would wipe the other, since a Pages deployment replaces the
+# whole site rather than merging into it.
 on:
   push:
-    branches: [main]
+    branches: [main, feature/background-search-index]
   workflow_dispatch:
 
 permissions:
@@ -10,31 +18,74 @@ permissions:
   pages: write
   id-token: write
 
-# One deployment at a time, and never cancel one that is already running:
-# a superseded Pages deploy fails rather than yielding cleanly, which is
-# why GitHub's own guidance is to serialize rather than cancel.
+# Never cancel an in-progress deploy: a superseded Pages deployment fails
+# outright rather than yielding cleanly, so racing deploys from both
+# branches need to serialize instead.
 concurrency:
   group: pages
   cancel-in-progress: false
+
+env:
+  PREVIEW_BRANCH: feature/background-search-index
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main
+
+      # Tolerated failure: once this branch is merged or abandoned and
+      # deleted, main should keep deploying on its own rather than
+      # breaking on a missing ref.
+      - name: Check out preview branch
+        id: preview
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PREVIEW_BRANCH }}
+          path: new
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: main/package-lock.json
 
-      - run: npm ci
-      - run: npm run build
+      - name: Build main
+        working-directory: main
+        run: |
+          npm ci
+          npm run build
+
+      - name: Assemble site
+        run: |
+          mkdir -p site
+          cp -r main/dist/. site/
+
+      - name: Build preview
+        if: steps.preview.outcome == 'success'
+        working-directory: new
+        env:
+          # Assets must resolve under the subpath, not the site root.
+          VITE_BASE: /pst-viewer/new/
+        run: |
+          npm ci
+          npm run build
+
+      - name: Add preview to site
+        if: steps.preview.outcome == 'success'
+        run: |
+          mkdir -p site/new
+          cp -r new/dist/. site/new/
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: site
 
   deploy:
     needs: build

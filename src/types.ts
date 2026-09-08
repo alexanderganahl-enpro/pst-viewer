@@ -49,6 +49,42 @@ export interface MessageDetail {
   attachments: AttachmentMeta[]
 }
 
+/**
+ * Progress of the background header index — see
+ * src/worker/backgroundIndexer.ts. Pushed from the worker on a throttled
+ * cadence; not a response to any one request.
+ *
+ *  - `running`  actively indexing.
+ *  - `paused`   user-paused; whatever's indexed so far is still searchable.
+ *  - `done`     every folder is indexed (live or loaded from cache).
+ *  - `capped`   hit the memory ceiling; search covers what's indexed, and
+ *               only that.
+ *  - `stopped`  user chose "Skip indexing"; same partial-coverage story as
+ *               `capped`, just user-initiated instead of a safety limit.
+ *  - `idle`     nothing has been opened yet.
+ */
+export type IndexState = 'running' | 'paused' | 'done' | 'capped' | 'stopped' | 'idle'
+
+export interface IndexProgress {
+  totalMessages: number
+  indexedMessages: number
+  foldersTotal: number
+  foldersDone: number
+  currentFolderName: string | null
+  state: IndexState
+}
+
+export interface SearchHit {
+  folderId: string
+  folderName: string
+  messageId: string
+  subject: string
+  fromName: string
+  date: string | null
+}
+
+export type IndexControlAction = 'pause' | 'resume' | 'stop' | 'clearCache'
+
 /** Files at or above this size are opened in "lazy" mode: the worker reads
  * byte ranges on demand straight from the `File` (via `File.slice()` +
  * `FileReaderSync`) instead of loading the whole thing into memory up
@@ -65,7 +101,18 @@ export type FileSource =
 /* ---- Worker request / response protocol ---- */
 
 export type WorkerRequest =
-  | { kind: 'open'; reqId: number; fileName: string; fileSize: number; source: FileSource }
+  | {
+      kind: 'open'
+      reqId: number
+      fileName: string
+      fileSize: number
+      /** From `File.lastModified`. Passed explicitly (rather than reread
+       * from a retained File) because eager mode only ever hands the
+       * worker an ArrayBuffer — this is the cheap fingerprint the
+       * background indexer keys its IndexedDB cache on. */
+      lastModified: number
+      source: FileSource
+    }
   | { kind: 'listFolder'; reqId: number; folderId: string }
   | { kind: 'getMessage'; reqId: number; folderId: string; messageId: string }
   | {
@@ -75,6 +122,8 @@ export type WorkerRequest =
       messageId: string
       attachmentIndex: number
     }
+  | { kind: 'searchArchive'; reqId: number; query: string; limit: number }
+  | { kind: 'indexControl'; reqId: number; action: IndexControlAction }
 
 export type WorkerResponse =
   | { kind: 'opened'; reqId: number; storeName: string; tree: FolderNode }
@@ -87,4 +136,8 @@ export type WorkerResponse =
       mimeType: string
       buffer: ArrayBuffer
     }
+  | { kind: 'searchResults'; reqId: number; hits: SearchHit[] }
+  | { kind: 'indexControlAck'; reqId: number }
+  /** Pushed unprompted, not a reply to any request — see IndexProgress. */
+  | { kind: 'indexProgress'; progress: IndexProgress }
   | { kind: 'error'; reqId: number; message: string }
