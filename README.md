@@ -4,15 +4,15 @@ A small, open-source PST file browser that runs **entirely in your browser**. Op
 Outlook `.pst` (or `.ost`) file and browse its folders, messages, and attachments — nothing
 is uploaded, streamed, or sent anywhere. There is no backend.
 
-**[Open the app →](https://creedofman.github.io/pst-viewer/)**
+**[Open the app →](https://alexanderganahl-enpro.github.io/pst-viewer/)**
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 
 > In-progress work sometimes gets a live preview at
-> **[/new →](https://creedofman.github.io/pst-viewer/new/)** before it merges to main — see
+> **[/new →](https://alexanderganahl-enpro.github.io/pst-viewer/new/)** before it merges to main — see
 > `preview` in the branch list if you're looking for what's there right now.
 
-Sibling project to **[msg-viewer](https://github.com/creedofman/msg-viewer)** — same
+Sibling project to **[msg-viewer](https://github.com/alexanderganahl-enpro/msg-viewer)** — same
 Outlook-on-the-web styling, same local-only architecture, same privacy guarantees. Where
 this app reads a whole PST mailbox archive, msg-viewer reads one `.msg` message file at a
 time.
