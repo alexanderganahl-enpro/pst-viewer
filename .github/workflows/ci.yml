@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, perf/fast-folder-load]
+    branches: [main]
 
 jobs:
   build:
