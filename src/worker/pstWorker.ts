@@ -25,8 +25,15 @@ import type {
   WorkerRequest,
   WorkerResponse,
 } from '../types'
+import { BackgroundIndexer } from './backgroundIndexer'
 import { createLazyFileSource } from './lazyFileSource'
 import { sanitizeFilename } from './sanitizeFilename'
+
+// The header index for the currently open file. Runs independently of
+// everything above — it never materializes a PSTMessage, and folder
+// listing / message reading never consult it — so it can only ever make
+// search faster, not change what browsing does. See backgroundIndexer.ts.
+let indexer: BackgroundIndexer | null = null
 
 // Folder id -> live PSTFolder instance, so we can re-enter a folder later
 // without re-walking the tree. Folder objects themselves are lightweight
@@ -216,6 +223,8 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       case 'open': {
         folderById.clear()
         messagesByFolder.clear()
+        indexer?.stop()
+        indexer = null
         const lazy =
           req.source.mode === 'lazy'
             ? createLazyFileSource(req.source.file, req.fileSize)
@@ -234,6 +243,14 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         const tree = buildFolderNode(root, 'root')
         tree.name = storeName
         post({ kind: 'opened', reqId: req.reqId, storeName, tree })
+
+        // Kicked off after 'opened' is sent, not before: the folder tree
+        // and first folder should render immediately, with indexing
+        // filling in behind it rather than being any part of what "open"
+        // waits on.
+        indexer = new BackgroundIndexer(pstFile, folderById, tree, req.fileSize, req.lastModified)
+        indexer.onProgress((progress) => post({ kind: 'indexProgress', progress }))
+        indexer.start()
         break
       }
       case 'listFolder': {
@@ -287,6 +304,39 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
           },
           [arrayBuffer]
         )
+        break
+      }
+      case 'searchArchive': {
+        const hits = indexer?.search(req.query, req.limit) ?? []
+        post({ kind: 'searchResults', reqId: req.reqId, hits })
+        break
+      }
+      case 'indexControl': {
+        if (!indexer) {
+          post({ kind: 'indexControlAck', reqId: req.reqId })
+          break
+        }
+        if (req.action === 'clearCache') {
+          // The only async control action — the others are synchronous
+          // flag flips. Acked once the IndexedDB delete actually settles,
+          // so a caller that then triggers a fresh index isn't racing its
+          // own cache clear.
+          indexer
+            .clearCache()
+            .then(() => post({ kind: 'indexControlAck', reqId: req.reqId }))
+            .catch((err) =>
+              post({
+                kind: 'error',
+                reqId: req.reqId,
+                message: err instanceof Error ? err.message : 'Could not clear the cached index',
+              })
+            )
+          break
+        }
+        if (req.action === 'pause') indexer.pause()
+        else if (req.action === 'resume') indexer.resume()
+        else if (req.action === 'stop') indexer.stop()
+        post({ kind: 'indexControlAck', reqId: req.reqId })
         break
       }
     }

@@ -22,8 +22,12 @@ const pstPolyfills = () =>
 
 // https://vite.dev/config/
 export default defineConfig({
-  // Served from https://<user>.github.io/pst-viewer/
-  base: '/pst-viewer/',
+  // Served from https://<user>.github.io/pst-viewer/ by default. The
+  // long-lived `preview` branch overrides this to /pst-viewer/new/ via
+  // VITE_BASE — see .github/workflows/deploy.yml, which builds both main
+  // and `preview` into the same Pages site at different subpaths so
+  // in-progress work can be tested before merging.
+  base: process.env.VITE_BASE ?? '/pst-viewer/',
   plugins: [pstPolyfills(), react()],
   worker: {
     // All the PST-parsing code (and its need for these polyfills) lives in

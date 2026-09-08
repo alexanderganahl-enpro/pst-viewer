@@ -1,8 +1,11 @@
 import type {
   AttachmentMeta,
   FolderNode,
+  IndexControlAction,
+  IndexProgress,
   MessageDetail,
   MessageSummary,
+  SearchHit,
   WorkerRequest,
   WorkerResponse,
 } from '../types'
@@ -40,6 +43,12 @@ const TIMEOUTS_MS: Record<string, number> = {
   listFolder: 10 * 60_000,
   getMessage: 2 * 60_000,
   getAttachment: 5 * 60_000,
+  // A search only ever scans what's already been decoded into memory —
+  // there is no PST-format read on this path at all — so this is really
+  // just a "the worker thread is wedged" tripwire, not a concession to
+  // legitimately slow work.
+  searchArchive: 30_000,
+  indexControl: 30_000,
 }
 
 interface PendingEntry {
@@ -58,6 +67,7 @@ export class PstClient {
    * later call fails fast instead of hanging on a thread that will never
    * answer. */
   private deadReason: string | null = null
+  private indexProgressListener: ((progress: IndexProgress) => void) | null = null
 
   constructor() {
     this.worker = new Worker(new URL('../worker/pstWorker.ts', import.meta.url), {
@@ -65,6 +75,14 @@ export class PstClient {
     })
     this.worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
       const res = event.data
+
+      // Pushed unprompted by the background indexer — not a reply to any
+      // particular request, so it never has a matching reqId to route by.
+      if (res.kind === 'indexProgress') {
+        this.indexProgressListener?.(res.progress)
+        return
+      }
+
       const entry = this.pending.get(res.reqId)
       if (!entry) return
       this.pending.delete(res.reqId)
@@ -78,6 +96,13 @@ export class PstClient {
     this.worker.onerror = (event) => {
       this.failAll(new Error(event.message || 'PST worker crashed'))
     }
+  }
+
+  /** Subscribes to background-indexing progress. One listener at a time —
+   * App.tsx registers exactly one, matching the one PstClient per opened
+   * file. */
+  onIndexProgress(listener: (progress: IndexProgress) => void): void {
+    this.indexProgressListener = listener
   }
 
   /** Rejects every in-flight request. Without this, a teardown would leave
@@ -136,6 +161,7 @@ export class PstClient {
         kind: 'open',
         fileName: file.name,
         fileSize: file.size,
+        lastModified: file.lastModified,
         source: { mode: 'lazy', file },
       })
     } else {
@@ -150,6 +176,7 @@ export class PstClient {
           kind: 'open',
           fileName: file.name,
           fileSize: file.size,
+          lastModified: file.lastModified,
           source: { mode: 'eager', buffer },
         },
         [buffer]
@@ -188,6 +215,26 @@ export class PstClient {
       attachmentIndex,
     })
     return res
+  }
+
+  /** Searches every folder's background-built header index — subject,
+   * sender, and To/Cc, not message bodies (those aren't indexed; see
+   * README's Limitations). Covers whatever has been indexed so far, which
+   * an IndexProgress alongside the results lets the caller disclose. */
+  async searchArchive(query: string, limit = 200): Promise<SearchHit[]> {
+    const res = await this.call<Extract<WorkerResponse, { kind: 'searchResults' }>>({
+      kind: 'searchArchive',
+      query,
+      limit,
+    })
+    return res.hits
+  }
+
+  async controlIndex(action: IndexControlAction): Promise<void> {
+    await this.call<Extract<WorkerResponse, { kind: 'indexControlAck' }>>({
+      kind: 'indexControl',
+      action,
+    })
   }
 
   dispose() {

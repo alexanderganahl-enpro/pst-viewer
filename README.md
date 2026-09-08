@@ -8,6 +8,10 @@ is uploaded, streamed, or sent anywhere. There is no backend.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 
+> In-progress work sometimes gets a live preview at
+> **[/new →](https://alexanderganahl-enpro.github.io/pst-viewer/new/)** before it merges to main — see
+> `preview` in the branch list if you're looking for what's there right now.
+
 Sibling project to **[msg-viewer](https://github.com/alexanderganahl-enpro/msg-viewer)** — same
 Outlook-on-the-web styling, same local-only architecture, same privacy guarantees. Where
 this app reads a whole PST mailbox archive, msg-viewer reads one `.msg` message file at a
@@ -30,7 +34,7 @@ and parsed there; it never leaves the tab.
   blocked by default, so opening mail doesn't tell the sender you read it
 - 👀 Read-only: the file is only ever read, never modified or re-written
 - 📎 View and save attachments locally (as a normal browser download)
-- 🔍 Search within the open folder
+- 🔍 Search within the open folder, or across the whole archive once it's indexed (see below)
 - ⚡ Handles large mailboxes without choking the UI (virtualized message list, off-main-thread
   parsing in a Web Worker)
 - 🌗 Light and dark mode, following your system setting
@@ -90,6 +94,10 @@ npm run preview
   web app uses. Nothing is sent anywhere first.
 - The file is only read. This app never writes to, or otherwise modifies, the PST/OST file
   you open.
+- **The search index never leaves your device either.** It's built from message headers only
+  (subject, sender, recipients — never bodies or attachments) and cached in this browser
+  tab's IndexedDB, purely so reopening the same file skips re-indexing. See
+  [Background search index](#background-search-index) for what's stored and how to clear it.
 
 None of this is a substitute for your own judgment — if a `.pst` file's contents are
 sensitive, that sensitivity doesn't change just because the tool reading it is local-only.
@@ -120,6 +128,31 @@ Either way:
 The lazy mode's cache/copy logic has unit tests
 ([lazyFileSource.test.ts](src/worker/__tests__/lazyFileSource.test.ts)) covering block-boundary
 stitching, the short final block, EOF clamping, and cache eviction — run with `npm test`.
+
+## Background search index
+
+Opening a file starts a background pass that indexes every folder's headers (subject, sender,
+recipients — never bodies or attachments) so you can search the whole archive, not just the
+open folder. It's designed to never get in your way:
+
+- **Never blocks browsing.** Indexing runs in the same Web Worker as everything else, in short
+  slices (a few milliseconds each) that yield between batches — any folder you click or
+  message you open jumps the queue. Classic per-folder loading is completely unchanged; the
+  index is a separate, additive structure built alongside it, not a replacement for it.
+- **Self-paced.** Slice size adapts to how fast your machine actually is, so a slow device
+  still stays responsive; a fast one finishes indexing sooner.
+- **Capped, honestly.** Indexing stops at roughly 2,000,000 messages (~330 MB) so an
+  enormous archive can't grow memory use without bound. If a file hits that cap, the status
+  panel says so plainly — search covers what got indexed, not the whole file.
+- **Cached, and clearable.** Progress is saved to this browser's IndexedDB per folder, keyed
+  to the opened file's size and modified time, so reopening the same file resumes instead of
+  re-indexing from scratch. A "Clear cached index" control in the status panel removes it.
+- **Visible and controllable.** A status bar under the toolbar shows messages/folders indexed
+  and the current folder, with Pause/Resume and Skip controls — indexing is something you can
+  see and stop, not something happening silently in the background.
+
+Search-all-mail results resolve to real messages: selecting one opens it through the same
+`getMessage()` call a normal click uses, in whichever folder it's actually in.
 
 ## Limitations
 

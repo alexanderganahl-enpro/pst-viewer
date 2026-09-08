@@ -1,11 +1,12 @@
 import { useRef } from 'react'
-import { CloseIcon, LockIcon, MailIcon, OpenFileIcon } from './Icons'
+import { CloseIcon, LockIcon, MailIcon, OpenFileIcon, SearchIcon } from './Icons'
 
 interface TopBarProps {
   fileName: string | null
   fileSize: number | null
   onOpenFile: (file: File) => void
   onClose: () => void
+  onSearchArchive?: () => void
 }
 
 function formatBytes(bytes: number): string {
@@ -14,7 +15,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`
 }
 
-export function TopBar({ fileName, fileSize, onOpenFile, onClose }: TopBarProps) {
+export function TopBar({ fileName, fileSize, onOpenFile, onClose, onSearchArchive }: TopBarProps) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   return (
@@ -45,6 +46,12 @@ export function TopBar({ fileName, fileSize, onOpenFile, onClose }: TopBarProps)
           <LockIcon width={14} height={14} />
           100% local
         </span>
+        {fileName && onSearchArchive && (
+          <button type="button" className="btn btn--ghost" onClick={onSearchArchive} title="Search all mail">
+            <SearchIcon width={16} height={16} />
+            Search all mail
+          </button>
+        )}
         <button type="button" className="btn btn--primary" onClick={() => inputRef.current?.click()}>
           <OpenFileIcon width={16} height={16} />
           Open PST file
